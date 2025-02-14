@@ -491,30 +491,3 @@ def display_boxplot_with_stats2(dataframe, column_name):
 
     # Afficher le graphique
     plt.show()
-
-def plot_histogram(df, column):
-    """
-    Affiche un histogramme pour une variable donnée d'un DataFrame.
-    :param df: DataFrame pandas
-    :param column: Nom de la colonne à visualiser
-    """
-    plt.figure(figsize=(8, 5))
-    sns.histplot(df[column].dropna(), bins=30, kde=True)
-    plt.title(f'Histogramme de {column}')
-    plt.xlabel(column)
-    plt.ylabel('Fréquence')
-    plt.show()
-
-def plot_scatter(df, column_x, column_y):
-    """
-    Affiche un diagramme de dispersion pour deux variables d'un DataFrame.
-    :param df: DataFrame pandas
-    :param column_x: Nom de la colonne pour l'axe X
-    :param column_y: Nom de la colonne pour l'axe Y
-    """
-    plt.figure(figsize=(8, 5))
-    sns.scatterplot(x=df[column_x], y=df[column_y])
-    plt.title(f'Diagramme de dispersion entre {column_x} et {column_y}')
-    plt.xlabel(column_x)
-    plt.ylabel(column_y)
-    plt.show()
