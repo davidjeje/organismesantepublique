@@ -1,7 +1,10 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import seaborn as sns
+from scipy.stats import spearmanr
+from sklearn.decomposition import PCA
 
 def check_unique_columns(dataframe, columns=None):
     """
@@ -346,40 +349,45 @@ def detect_outliers(df, columns, method="IQR", plausibility_check=True):
 
     return outliers
 
-def replace_outliers(df, outliers_detected, columns, strategy="median"):
+def replace_outliers(df, outliers_detected, columns, strategy="median", replace_with_nan=False):
     """
-    Remplace les outliers détectés dans un DataFrame par une valeur spécifique.
+    Remplace les outliers détectés dans un DataFrame par une valeur spécifique ou NaN.
     
-    Args:
-        df (pd.DataFrame): DataFrame contenant les données.
-        outliers_detected (pd.DataFrame): DataFrame booléen indiquant la présence d'outliers.
-        columns (list): Liste des colonnes à traiter.
-        strategy (str): Stratégie de remplacement ("median", "mean", "mode").
+    Paramètres :
+    - df : pd.DataFrame -> DataFrame contenant les données.
+    - outliers_detected : dict -> Dictionnaire des outliers avec colonnes et indices.
+    - columns : list -> Liste des colonnes à traiter.
+    - strategy : str -> Stratégie de remplacement ('median', 'mean', 'mode').
+    - replace_with_nan : bool -> Si True, remplace les outliers par NaN au lieu d'une statistique.
     
-    Returns:
-        pd.DataFrame: DataFrame avec les valeurs aberrantes remplacées.
+    Retourne :
+    - pd.DataFrame -> DataFrame avec les valeurs aberrantes remplacées.
     """
     df_cleaned = df.copy()
 
     for col in columns:
         if col in df_cleaned.columns:
-            if strategy == "median":
-                replacement_value = df_cleaned[col].median()
-            elif strategy == "mean":
-                replacement_value = df_cleaned[col].mean()
-            elif strategy == "mode":
-                replacement_value = df_cleaned[col].mode()[0] if not df_cleaned[col].mode().empty else np.nan
+            if replace_with_nan:
+                replacement_value = np.nan
             else:
-                raise ValueError("La stratégie doit être 'median', 'mean' ou 'mode'.")
-
+                if strategy == "median":
+                    replacement_value = df_cleaned[col].median()
+                elif strategy == "mean":
+                    replacement_value = df_cleaned[col].mean()
+                elif strategy == "mode":
+                    replacement_value = df_cleaned[col].mode()[0] if not df_cleaned[col].mode().empty else np.nan
+                else:
+                    raise ValueError("La stratégie doit être 'median', 'mean' ou 'mode'.")
+            
             print(f"🔹 {col} - Valeur utilisée pour remplacer les outliers : {replacement_value}")
-
+            
             # Remplacement des outliers détectés
             df_cleaned.loc[outliers_detected[col], col] = replacement_value
 
-            # Vérification : Remplir les NaN restants avec la même stratégie
-            df_cleaned[col] = df_cleaned[col].fillna(replacement_value)
-
+            # Vérification : Remplir les NaN restants avec la même stratégie si replace_with_nan est False
+            if not replace_with_nan:
+                df_cleaned[col] = df_cleaned[col].fillna(replacement_value)
+    
     return df_cleaned
 
 def replace_outliers2(df, outliers_detected, columns, strategy="median"):
@@ -517,4 +525,177 @@ def plot_scatter(df, column_x, column_y):
     plt.title(f'Diagramme de dispersion entre {column_x} et {column_y}')
     plt.xlabel(column_x)
     plt.ylabel(column_y)
+    plt.show()
+
+def plot_heatmap(df, columns=None, method='spearman', figsize=(8,6), cmap="coolwarm", annot=True):
+    """
+    Génère une heatmap de corrélation pour les colonnes sélectionnées d'un DataFrame.
+
+    :param df: pd.DataFrame - Le DataFrame contenant les données.
+    :param columns: list - Liste des colonnes à inclure dans la heatmap (par défaut, toutes les colonnes numériques).
+    :param method: str - Méthode de corrélation ('spearman', 'pearson', 'kendall').
+    :param figsize: tuple - Taille de la figure (par défaut : (8,6)).
+    :param cmap: str - Palette de couleurs pour la heatmap.
+    :param annot: bool - Afficher ou non les coefficients dans les cases.
+    """
+    
+    # Sélection des colonnes à analyser
+    if columns is None:
+        df_selected = df.select_dtypes(include=['number'])  # Sélectionne seulement les colonnes numériques
+    else:
+        df_selected = df[columns]
+    
+    # Calcul de la matrice de corrélation
+    corr_matrix = df_selected.corr(method=method)
+    
+    # Création de la heatmap avec Seaborn
+    plt.figure(figsize=figsize)
+    sns.heatmap(corr_matrix, annot=annot, cmap=cmap, fmt=".2f", linewidths=0.5, square=True, cbar=True)
+
+    # Ajout d'un titre
+    plt.title(f"Heatmap des corrélations ({method.capitalize()})")
+    plt.show()
+
+def test_spearman(df, col1, col2):
+    """
+    Effectue le test de Spearman entre deux colonnes et affiche le coefficient de corrélation et la p-value.
+    :param df: DataFrame contenant les données
+    :param col1: Nom de la première colonne
+    :param col2: Nom de la deuxième colonne
+    """
+    coef, p_value = spearmanr(df[col1], df[col2], nan_policy='omit')
+
+    print(f"Test de Spearman entre {col1} et {col2}:")
+    print(f"📊 Coefficient de corrélation : {coef:.3f}")
+    print(f"📉 P-value : {p_value:.5f}")
+    
+    if p_value < 0.05:
+        print("✅ La corrélation est significative (p < 0.05).")
+    else:
+        print("❌ La corrélation n'est pas significative (p >= 0.05).")
+    print("-" * 50)
+
+def plot_elbow_curve(data_scaled):
+    """
+    Applique une ACP sur les données standardisées et trace la courbe du coude.
+
+    Paramètres :
+    - data_scaled : array numpy, données prétraitées et standardisées
+
+    Retour :
+    - pca : objet PCA ajusté
+    - explained_variance : array, variance expliquée par chaque composante
+    """
+    # Appliquer l'ACP
+    pca = PCA()
+    pca.fit(data_scaled)
+
+    # Calculer les valeurs propres (variance expliquée)
+    explained_variance = pca.explained_variance_ratio_
+
+    # Tracer la courbe du coude
+    plt.figure(figsize=(8, 5))
+    plt.plot(range(1, len(explained_variance) + 1), explained_variance.cumsum(), 
+             marker='o', linestyle='--', color='b')
+    plt.xlabel("Nombre de composantes principales")
+    plt.ylabel("Variance expliquée cumulée")
+    plt.title("Méthode du coude pour choisir le nombre optimal de composantes")
+    plt.grid()
+    plt.show()
+
+    return pca, explained_variance
+
+def plot_elbow_curve2(data_scaled):
+    """
+    Applique une ACP sur les données standardisées et trace la courbe du coude.
+
+    Paramètres :
+    - data_scaled : array numpy, données prétraitées et standardisées
+
+    Retour :
+    - pca : objet PCA ajusté
+    """
+    # Appliquer l'ACP
+    pca = PCA()
+    pca.fit(data_scaled)
+
+    # Calculer les valeurs propres (variance expliquée)
+    explained_variance = pca.explained_variance_ratio_
+
+    # Tracer la courbe du coude
+    plt.figure(figsize=(8, 5))
+    plt.plot(range(1, len(explained_variance) + 1), explained_variance.cumsum(), 
+             marker='o', linestyle='--', color='b')
+    plt.xlabel("Nombre de composantes principales")
+    plt.ylabel("Variance expliquée cumulée")
+    plt.title("Méthode du coude pour choisir le nombre optimal de composantes")
+    plt.grid()
+    plt.show()
+
+    # Retourner uniquement l'objet PCA
+    return pca
+
+
+def plot_correlation_circle(pca, columns_for_pca):
+    """
+    Tracer le cercle des corrélations (ACP) avec les composantes principales.
+
+    Parameters:
+    pca : modèle PCA
+        Modèle PCA entraîné qui contient les informations des composantes principales.
+    columns_for_pca : list
+        Liste des noms des variables utilisées pour l'ACP.
+    """
+    # Calcul des coordonnées des variables dans l'espace des composantes principales
+    components = pca.components_
+
+    # Créer la figure et les axes
+    fig, ax = plt.subplots(figsize=(7, 7))
+
+    # Ajouter le cercle unité
+    circle = patches.Circle((0, 0), radius=1, edgecolor='black', facecolor='none', linestyle='dashed')
+    ax.add_patch(circle)
+
+    # Tracer les flèches pour chaque variable
+    for i, column in enumerate(columns_for_pca):
+        plt.arrow(0, 0, components[0, i], components[1, i], 
+                  head_width=0.05, head_length=0.05, color='r')
+        plt.text(components[0, i], components[1, i], column, fontsize=12)
+
+    # Limites et lignes de référence
+    plt.xlim(-1.1, 1.1)
+    plt.ylim(-1.1, 1.1)
+    plt.axhline(0, color='black', linewidth=0.5)
+    plt.axvline(0, color='black', linewidth=0.5)
+
+    # Titre et affichage
+    plt.title("Cercle des corrélations (ACP)")
+    plt.grid()
+    plt.show()
+
+def plot_pca_projection(pca, data_scaled, df_clean, column_for_color):
+    """
+    Trace la projection des individus dans l'espace des 2 premières composantes principales (PCA),
+    avec colorisation basée sur une variable spécifique.
+
+    Paramètres :
+    - pca : modèle PCA ajusté
+    - data_scaled : array numpy, données standardisées
+    - df_clean : DataFrame contenant les données nettoyées
+    - column_for_color : string, nom de la colonne à utiliser pour la colorisation
+    """
+    # Extraire les coordonnées des individus dans l'espace des composantes principales
+    df_pca = pca.transform(data_scaled)
+
+    # Ajouter la colonne pour la colorisation
+    df_clean[column_for_color] = df_clean[column_for_color]
+
+    # Tracer la projection
+    plt.figure(figsize=(8,6))
+    sns.scatterplot(x=df_pca[:, 0], y=df_pca[:, 1], hue=df_clean[column_for_color], palette="Set1", alpha=0.7)
+    plt.xlabel("Composante 1")
+    plt.ylabel("Composante 2")
+    plt.title("Projection des individus (colorisé par " + column_for_color + ")")
+    plt.legend(title=column_for_color,  loc='upper right')
+    plt.grid()
     plt.show()
