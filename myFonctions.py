@@ -3,8 +3,213 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import seaborn as sns
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, shapiro, levene, f_oneway, kruskal, kstest
 from sklearn.decomposition import PCA
+from sklearn.experimental import enable_iterative_imputer  # Nécessaire pour activer IterativeImputer
+from sklearn.impute import IterativeImputer
+from sklearn.linear_model import BayesianRidge
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+
+def plot_pca_individuals(df, plot_correlation_circle, plot_scree_plot, color_col=None):
+    """
+    Effectue une ACP et affiche le nuage de points des individus selon F1 et F2.
+    Agrège également les variables corrélées fortement avec F1 et F2 en nouvelles variables synthétiques.
+    
+    Paramètres :
+    - df : DataFrame contenant les données.
+    - plot_correlation_circle : Fonction pour afficher le cercle de corrélation.
+    - plot_scree_plot : Fonction pour afficher le graphique du coude.
+    - color_col : Nom de la colonne pour coloriser les points (optionnel).
+    """
+    # Remplacement des NaN par la médiane de chaque colonne
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    imputer = SimpleImputer(strategy='median', missing_values=np.nan)
+    df_imputed = pd.DataFrame(imputer.fit_transform(df[numeric_cols]), columns=numeric_cols, index=df.index)
+    
+    # Standardisation des données
+    scaler = StandardScaler()
+    df_scaled = scaler.fit_transform(df_imputed)
+    
+    # Application de l'ACP
+    pca = PCA()
+    pca_result = pca.fit_transform(df_scaled)
+    
+    # Calcul des composantes principales
+    pcs = pd.DataFrame(pca.components_.T, index=numeric_cols, 
+                        columns=[f'PC{i+1}' for i in range(len(pca.components_))])
+    
+    # Identifier les variables fortement corrélées avec F1 et F2
+    threshold = 0.5  # Seuil de corrélation significative
+    f1_vars = pcs.loc[abs(pcs['PC1']) > threshold, 'PC1'].index.tolist()
+    f2_vars = pcs.loc[abs(pcs['PC2']) > threshold, 'PC2'].index.tolist()
+    
+    # Création des variables synthétiques
+    df['F1_synth'] = df_imputed[f1_vars].mean(axis=1) if f1_vars else np.zeros(len(df))
+    df['F2_synth'] = df_imputed[f2_vars].mean(axis=1) if f2_vars else np.zeros(len(df))
+    
+    # Affichage du cercle de corrélation
+    plot_correlation_circle(pca, numeric_cols)
+    
+    # Affichage du graphique du coude
+    plot_scree_plot(pca)
+    
+    # Nuage de points des individus
+    plt.figure(figsize=(8, 6))
+    scatter = plt.scatter(pca_result[:, 0], pca_result[:, 1], 
+                           c=df[color_col] if color_col and color_col in df.columns else 'blue', 
+                           cmap='viridis', alpha=0.7)
+    plt.xlabel("F1")
+    plt.ylabel("F2")
+    plt.title("Nuage de points des individus (F1 vs F2)")
+    if color_col and color_col in df.columns:
+        plt.colorbar(scatter, label=color_col)
+    plt.grid()
+    plt.show()
+    
+    return df[['F1_synth', 'F2_synth']]
+
+def get_normal_columns(df, columns=None, alpha=0.05, max_sample_size=5000):
+    """
+    Identifie les colonnes normalement distribuées parmi un sous-ensemble de colonnes spécifiées.
+
+    :param df: DataFrame pandas
+    :param columns: Liste des colonnes à tester
+    :param alpha: Seuil de p-value pour accepter la normalité
+    :param max_sample_size: Taille maximale de l'échantillon pour éviter les avertissements sur la taille de l'échantillon
+    :return: Liste des colonnes normalement distribuées
+    """
+    normal_columns = []
+
+    # Si aucune liste de colonnes n'est fournie, prendre toutes les colonnes numériques
+    if columns is None:
+        columns = df.select_dtypes(include=['number']).columns.tolist()
+
+    for col in columns:
+        # Filtrer les valeurs numériques (en cas de non numériques dans la colonne)
+        data = df[col].dropna()
+
+        # Vérifier que la colonne contient des données numériques
+        if data.empty or not pd.api.types.is_numeric_dtype(data):
+            continue
+
+        # Limiter la taille de l'échantillon pour éviter le warning
+        sample = data.sample(n=min(len(data), max_sample_size), random_state=42)
+
+        # Test de Shapiro-Wilk pour la normalité
+        stat, p_value = shapiro(sample)
+        
+        # Si p > alpha, on considère que la colonne suit une distribution normale
+        if p_value > alpha:
+            normal_columns.append(col)
+
+    return normal_columns
+
+def test_shapiro_safe(data, max_sample_size=5000):
+    """
+    Effectue le test de Shapiro-Wilk sur un sous-échantillon si la taille est trop grande.
+    """
+    if len(data) > max_sample_size:
+        data = data.sample(max_sample_size, random_state=42)  # Échantillonne aléatoirement
+    return shapiro(data)
+
+def analyze_variables(df, target_col, features, max_sample_size=5000):
+    """
+    Analyse plusieurs variables quantitatives par rapport à une variable catégorielle.
+    
+    :param df: DataFrame pandas
+    :param target_col: Variable catégorielle (ex: 'nutrition_grade_fr')
+    :param features: Liste des variables quantitatives à analyser
+    :param max_sample_size: Taille max pour le test de Shapiro-Wilk
+    """
+    # Vérifier que les colonnes existent
+    missing_cols = [col for col in [target_col] + features if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Les colonnes suivantes sont absentes du DataFrame : {missing_cols}")
+
+    # Boucle sur les variables sélectionnées
+    for feature_col in features:
+        print(f"\n🔹 Analyse pour {feature_col} :")
+
+        # Suppression des NaN
+        df_clean = df[[target_col, feature_col]].dropna()
+
+        # Vérification si assez de données
+        if df_clean.shape[0] < 10:
+            print("⚠️ Trop peu de données pour analyser cette variable.")
+            continue
+
+        # Test de normalité (Shapiro-Wilk avec sous-échantillonnage)
+        stat, p_shapiro = test_shapiro_safe(df_clean[feature_col], max_sample_size)
+        normal = p_shapiro > 0.05
+        print(f"  - Test de Shapiro-Wilk : p-value = {p_shapiro:.5f} {'✅ Normal' if normal else '❌ Non normal'}")
+
+        # Test de Kolmogorov-Smirnov (optionnel)
+        stat_ks, p_ks = kstest(df_clean[feature_col], 'norm')
+        print(f"  - Test de Kolmogorov-Smirnov : p-value = {p_ks:.5f}")
+
+        # Regroupement par catégorie de la variable cible
+        groups = [group[feature_col].values for _, group in df_clean.groupby(target_col)]
+
+        # Test d'homogénéité des variances (Levene)
+        if len(groups) > 1:
+            stat, p_levene = levene(*groups)
+            homogene = p_levene > 0.05
+            print(f"  - Test de Levene (homogénéité) : p-value = {p_levene:.5f} {'✅ Homogène' if homogene else '❌ Non homogène'}")
+        else:
+            print("⚠️ Impossible de tester Levene (une seule catégorie présente).")
+            homogene = False
+
+        # Sélection du test statistique
+        if normal and homogene:
+            stat, p = f_oneway(*groups)
+            test_type = "ANOVA"
+        else:
+            stat, p = kruskal(*groups)
+            test_type = "Kruskal-Wallis"
+
+        # Résultat du test statistique
+        print(f"  - {test_type} : p-value = {p:.5f} {'⚠️ Différence significative !' if p < 0.05 else '✅ Aucune différence significative.'}")
+
+def plot_nutrition_scatter(df, x_col, y_col, color_col='nutrition-score-fr_100g', cmap='coolwarm'):
+    """
+    Crée un nuage de points avec une colorisation en fonction du score nutritionnel.
+    
+    :param df: DataFrame pandas contenant les données
+    :param x_col: Nom de la colonne pour l'axe des X
+    :param y_col: Nom de la colonne pour l'axe des Y
+    :param color_col: Nom de la colonne pour la colorisation (par défaut, 'nutrition-score-fr_100g')
+    :param cmap: Colormap utilisée pour la colorisation des points (par défaut, 'coolwarm')
+    """
+    
+    # Vérification que les colonnes existent et sont numériques
+    for col in [x_col, y_col, color_col]:
+        if col not in df.columns:
+            raise ValueError(f"La colonne '{col}' n'existe pas dans le DataFrame.")
+        if not np.issubdtype(df[col].dtype, np.number):
+            raise ValueError(f"La colonne '{col}' doit être numérique.")
+    
+    # Suppression des valeurs NaN pour éviter les erreurs
+    df_filtered = df[[x_col, y_col, color_col]].dropna()
+    
+    # Création du nuage de points avec seaborn
+    plt.figure(figsize=(10, 6))
+    scatter = plt.scatter(
+        df_filtered[x_col], df_filtered[y_col], 
+        c=df_filtered[color_col], cmap=cmap, edgecolors='k', alpha=0.7
+    )
+    
+    # Ajout de la barre de couleur
+    cbar = plt.colorbar(scatter)
+    cbar.set_label(color_col)
+    
+    # Ajout des titres et labels
+    plt.xlabel(x_col)
+    plt.ylabel(y_col)
+    plt.title(f'Nuage de points colorisé par {color_col}')
+    
+    # Affichage du graphique
+    plt.show()
 
 def check_unique_columns(dataframe, columns=None):
     """
@@ -699,3 +904,33 @@ def plot_pca_projection(pca, data_scaled, df_clean, column_for_color):
     plt.legend(title=column_for_color,  loc='upper right')
     plt.grid()
     plt.show()
+
+def impute_missing_values(df, columns=None, estimator=BayesianRidge(), max_iter=10, random_state=42):
+    """
+    Remplace les valeurs NaN dans certaines colonnes ou dans tout le DataFrame avec IterativeImputer.
+    
+    :param df: DataFrame pandas contenant des valeurs NaN
+    :param columns: Liste des colonnes à imputer (par défaut, toutes les colonnes numériques)
+    :param estimator: Modèle utilisé pour l'imputation (par défaut, BayesianRidge)
+    :param max_iter: Nombre maximal d'itérations pour l'imputation
+    :param random_state: Graine aléatoire pour la reproductibilité
+    :return: Nouveau DataFrame avec les valeurs NaN remplacées
+    """
+    df_imputed = df.copy()  # Création d'une copie du DataFrame original
+    
+    # Sélection des colonnes concernées
+    if columns is None:
+        columns = df_imputed.select_dtypes(include=[np.number]).columns  # Colonnes numériques uniquement
+    
+    # Vérification qu'il y a bien des colonnes sélectionnées
+    if len(columns) == 0:
+        raise ValueError("Aucune colonne valide pour l'imputation.")
+    
+    # Initialisation de l'IterativeImputer
+    imputer = IterativeImputer(estimator=estimator, max_iter=max_iter, random_state=random_state)
+    
+    # Imputation sur les colonnes sélectionnées
+    df_imputed[columns] = imputer.fit_transform(df_imputed[columns])
+    
+    return df_imputed
+
