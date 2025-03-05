@@ -6,10 +6,66 @@ import seaborn as sns
 from scipy.stats import spearmanr, shapiro, levene, f_oneway, kruskal, kstest
 from sklearn.decomposition import PCA
 from sklearn.experimental import enable_iterative_imputer  # Nécessaire pour activer IterativeImputer
-from sklearn.impute import IterativeImputer
+from sklearn.impute import IterativeImputer, SimpleImputer
 from sklearn.linear_model import BayesianRidge
 from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
+from sklearn.cluster import KMeans
+
+def test_shapiro_safe(data, max_sample_size=5000):
+    """Test de Shapiro-Wilk sur un échantillon limité à max_sample_size pour éviter l'erreur de taille."""
+    sample = data.sample(n=min(len(data), max_sample_size), random_state=42)
+    return shapiro(sample)
+
+
+def plot_pca_kmeans_projection(df, variables_pc_x, variables_pc_y, n_clusters=3, pc_x=0, pc_y=1):
+    """
+    Fonction pour réaliser la projection des individus sur un plan factoriel défini par PCX et PCY,
+    en appliquant une ACP (PCA) sur un ensemble de variables et un clustering K-means.
+
+    :param df: DataFrame pandas contenant les données brutes.
+    :param variables_pc_x: Liste des variables utilisées pour l'axe X dans la PCA.
+    :param variables_pc_y: Liste des variables utilisées pour l'axe Y dans la PCA.
+    :param n_clusters: Nombre de clusters pour le K-means (par défaut 3).
+    :param pc_x: Index de la composante principale à afficher sur l'axe X (ex: 0 pour PC1, 2 pour PC3).
+    :param pc_y: Index de la composante principale à afficher sur l'axe Y (ex: 1 pour PC2, 3 pour PC4).
+    """
+
+    # Sélectionner les colonnes pour X et Y
+    df_selected = df[variables_pc_x + variables_pc_y]
+
+    # Imputation des valeurs manquantes par la moyenne
+    imputer = SimpleImputer(strategy='mean')
+    df_imputed = imputer.fit_transform(df_selected)
+
+    # Standardisation des données
+    scaler = StandardScaler()
+    df_scaled = scaler.fit_transform(df_imputed)
+
+    # Vérifier combien de composantes peuvent être extraites
+    max_components = min(df_scaled.shape)  # min(n_samples, n_features)
+
+    # Vérifier que les indices de composantes à afficher sont valides
+    if pc_x >= max_components or pc_y >= max_components:
+        raise ValueError(f"Impossible d'afficher PC{pc_x+1} et PC{pc_y+1}. "
+                         f"Le maximum possible est PC{max_components}.")
+
+    # Appliquer la PCA avec seulement le nombre de composantes nécessaires
+    pca = PCA(n_components=max_components)
+    pca_components = pca.fit_transform(df_scaled)
+
+    # Appliquer K-means sur les données après PCA
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    clusters = kmeans.fit_predict(pca_components)
+
+    # Affichage de la projection des individus
+    plt.figure(figsize=(8, 6))
+    scatter = plt.scatter(pca_components[:, pc_x], pca_components[:, pc_y], c=clusters, cmap='viridis', alpha=0.7)
+    plt.title(f"Projection des individus sur PC{pc_x+1} et PC{pc_y+1} avec K-means")
+    plt.xlabel(f'PC{pc_x+1} (basé sur {", ".join(variables_pc_x)})')
+    plt.ylabel(f'PC{pc_y+1} (basé sur {", ".join(variables_pc_y)})')
+    plt.colorbar(scatter, label="Cluster")
+    plt.grid(True)
+    plt.show()
 
 def plot_pca_individuals(df, plot_correlation_circle, plot_scree_plot, color_col=None):
     """
@@ -104,14 +160,6 @@ def get_normal_columns(df, columns=None, alpha=0.05, max_sample_size=5000):
             normal_columns.append(col)
 
     return normal_columns
-
-def test_shapiro_safe(data, max_sample_size=5000):
-    """
-    Effectue le test de Shapiro-Wilk sur un sous-échantillon si la taille est trop grande.
-    """
-    if len(data) > max_sample_size:
-        data = data.sample(max_sample_size, random_state=42)  # Échantillonne aléatoirement
-    return shapiro(data)
 
 def analyze_variables(df, target_col, features, max_sample_size=5000):
     """
@@ -211,35 +259,6 @@ def plot_nutrition_scatter(df, x_col, y_col, color_col='nutrition-score-fr_100g'
     # Affichage du graphique
     plt.show()
 
-def check_unique_columns(dataframe, columns=None):
-    """
-    Vérifie si une ou plusieurs colonnes d'un DataFrame contiennent des valeurs uniques.
-
-    Parameters:
-        dataframe (pd.DataFrame): Le DataFrame à analyser.
-        columns (list or str, optional): Liste des colonnes à vérifier ou une seule colonne.
-                                         Si None, toutes les colonnes du DataFrame sont analysées.
-
-    Returns:
-        dict: Un dictionnaire indiquant pour chaque colonne si elle contient des valeurs uniques.
-              Clé : nom de la colonne, Valeur : True (unique) ou False (non unique).
-    """
-    # Si aucune colonne n'est spécifiée, vérifier toutes les colonnes
-    if columns is None:
-        columns = dataframe.columns
-    elif isinstance(columns, str):
-        columns = [columns]
-    
-    # Vérifier les colonnes spécifiées
-    uniqueness = {}
-    for column in columns:
-        if column in dataframe.columns:
-            uniqueness[column] = dataframe[column].is_unique
-        else:
-            raise ValueError(f"La colonne '{column}' n'existe pas dans le DataFrame.")
-    
-    return uniqueness
-
 def remove_duplicates(df, id_column):
     """
     Supprime les doublons en se basant uniquement sur un identifiant unique.
@@ -257,19 +276,6 @@ def remove_duplicates(df, id_column):
     df_cleaned = df.drop_duplicates(subset=[id_column])
 
     return df_cleaned
-
-def find_unique_identifier(df):
-    """
-    Trouve la colonne qui pourrait être un identifiant unique.
-
-    Parameters:
-    df (pd.DataFrame): Le DataFrame à analyser.
-
-    Returns:
-    list: Liste des colonnes qui sont des identifiants uniques.
-    """
-    unique_cols = [col for col in df.columns if df[col].nunique() == len(df) and df[col].isnull().sum() == 0]
-    return unique_cols
 
 def filter_duplicates(df, columns=None):
     """
@@ -290,19 +296,6 @@ def filter_duplicates(df, columns=None):
     else:
         duplicates = df[df.duplicated(keep=False)]  # Vérifier les doublons sur toutes les colonnes
 
-    return duplicates
-
-def filter_duplicates_index(df):
-    """
-    Filtre le DataFrame pour afficher uniquement les lignes avec des index dupliqués.
-    
-    Parameters:
-    df (pd.DataFrame): Le DataFrame à analyser.
-    
-    Returns:
-    pd.DataFrame: DataFrame contenant uniquement les lignes avec des index dupliqués.
-    """
-    duplicates = df[df.index.duplicated(keep=False)]  # Garder toutes les occurrences d'un index dupliqué
     return duplicates
 
 def calculate_mode(df, columns=None):
@@ -440,68 +433,6 @@ def display_boxplot_with_stats(dataframe, column_name):
     # Afficher le graphique
     plt.show()
 
-def display_boxplot_with_stats3(dataframe, column_name):
-    """
-    Affiche un graphique box plot pour une colonne donnée d'un DataFrame
-    et ajoute des lignes pour la moyenne, la médiane et l'écart-type.
-    Optimisé pour de grands ensembles de données.
-    
-    Parameters:
-        dataframe (pd.DataFrame): Le DataFrame contenant les données.
-        column_name (str): Le nom de la colonne à afficher dans le boxplot.
-    """
-    # Calcul des statistiques
-    data = dataframe[column_name].dropna()
-    mean = data.mean()
-    median = data.median()
-    std = data.std()
-
-    # Création de la figure et des axes
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    # Box plot avec gestion des outliers
-    bp = ax.boxplot(data, showfliers=False, whis=1.5)
-
-    # Ajouter la ligne de la moyenne
-    ax.axhline(y=mean, color='r', linestyle='--', label='Moyenne')
-
-    # Ajouter la ligne de la médiane (déjà présente dans le boxplot, mais on la rend plus visible)
-    ax.axhline(y=median, color='b', linestyle='-', label='Médiane')
-
-    # Ajouter les lignes de l'écart-type
-    ax.axhline(y=mean + std, color='g', linestyle=':', label='Écart-type (+)')
-    ax.axhline(y=mean - std, color='g', linestyle=':', label='Écart-type (-)')
-
-    # Ajouter des annotations textuelles avec des positions ajustées
-    ax.annotate(f'Moyenne: {mean:.2f}', 
-                xy=(1.1, mean), xycoords=('axes fraction', 'data'),
-                bbox=dict(boxstyle="round,pad=0.3", edgecolor='red', facecolor='white'),
-                color='red', fontsize=10, ha='left', va='center')
-
-    ax.annotate(f'Médiane: {median:.2f}', 
-                xy=(1.1, median), xycoords=('axes fraction', 'data'),
-                bbox=dict(boxstyle="round,pad=0.3", edgecolor='blue', facecolor='white'),
-                color='blue', fontsize=10, ha='left', va='center')
-
-    ax.annotate(f'Écart-type: {std:.2f}', 
-                xy=(1.1, mean + std), xycoords=('axes fraction', 'data'),
-                bbox=dict(boxstyle="round,pad=0.3", edgecolor='green', facecolor='white'),
-                color='green', fontsize=10, ha='left', va='center')
-
-    # Titre et labels
-    ax.set_title(f'Box Plot {column_name}')
-    ax.set_ylabel(column_name)
-    ax.set_xticks([])  # Supprime les ticks de l'axe x
-
-    # Ajouter une légende
-    ax.legend(loc='upper left', bbox_to_anchor=(1.2, 1))
-
-    # Ajuster la mise en page
-    plt.tight_layout()
-
-    # Afficher le graphique
-    plt.show()
-
 
 def detect_outliers(df, columns, method="IQR", plausibility_check=True):
     """
@@ -595,127 +526,41 @@ def replace_outliers(df, outliers_detected, columns, strategy="median", replace_
     
     return df_cleaned
 
-def replace_outliers2(df, outliers_detected, columns, strategy="median"):
-    """
-    Remplace les outliers détectés dans un DataFrame par une valeur spécifique.
-    
-    Args:
-        df (pd.DataFrame): DataFrame contenant les données.
-        outliers_detected (pd.DataFrame): DataFrame booléen indiquant la présence d'outliers.
-        columns (list): Liste des colonnes à traiter.
-        strategy (str): Stratégie de remplacement ("median", "mean", "mode").
-    
-    Returns:
-        pd.DataFrame: DataFrame avec les valeurs aberrantes remplacées.
-    """
-    df_cleaned = df.copy()
-
-    for col in columns:
-        if col in df_cleaned.columns:
-            if strategy == "median":
-                replacement_value = df_cleaned[col].median()
-            elif strategy == "mean":
-                replacement_value = df_cleaned[col].mean()
-            elif strategy == "mode":
-                replacement_value = df_cleaned[col].mode()[0] if not df_cleaned[col].mode().empty else np.nan
-            else:
-                raise ValueError("La stratégie doit être 'median', 'mean' ou 'mode'.")
-
-
-            # Remplacement des outliers détectés
-            df_cleaned.loc[outliers_detected[col], col] = replacement_value
-
-            # Vérification : Remplir les NaN restants avec la même stratégie
-            df_cleaned[col] = df_cleaned[col].fillna(replacement_value)
-
-    return df_cleaned
-
-def display_boxplot_with_stats2(dataframe, column_name):
-    """
-    Affiche un graphique box plot pour une colonne donnée d'un DataFrame
-    et ajoute des lignes pour la moyenne, la médiane, l'écart-type, ainsi que les moustaches du boxplot.
-    
-    Parameters:
-        dataframe (pd.DataFrame): Le DataFrame contenant les données.
-        column_name (str): Le nom de la colonne à afficher dans le boxplot.
-    """
-    # Calcul des statistiques
-    mean = dataframe[column_name].mean()
-    median = dataframe[column_name].median()
-    std = dataframe[column_name].std()
-
-    # Box plot avec personnalisation
-    ax = dataframe.boxplot(column=column_name, patch_artist=True, 
-                           boxprops=dict(facecolor='lightblue', color='blue'),
-                           whiskerprops=dict(color='green', linewidth=2),
-                           capprops=dict(color='red', linewidth=2),
-                           flierprops=dict(marker='o', color='purple', markersize=6))
-
-    # Ajouter la ligne de la moyenne
-    plt.axhline(y=mean, color='r', linestyle='--', label='Moyenne')
-
-    # Ajouter la ligne de la médiane
-    plt.axhline(y=median, color='b', linestyle='-', label='Médiane')
-
-    # Ajouter les lignes de l'écart-type
-    plt.axhline(y=mean + std, color='g', linestyle=':', label='Écart-type (+)')
-    plt.axhline(y=mean - std, color='g', linestyle=':', label='Écart-type (-)')
-
-    # Ajouter des annotations textuelles avec des positions ajustées
-    # Moyenne (au-dessus)
-    plt.annotate(f'Moyenne: {mean:.2f}', 
-                 xy=(0.5, mean + 0.05), xycoords='data',  # Légèrement au-dessus de la ligne
-                 bbox=dict(boxstyle="round,pad=0.3", edgecolor='red', facecolor='white'),
-                 color='red', fontsize=10, ha='center')
-
-    # Médiane (au-dessous)
-    plt.annotate(f'Médiane: {median:.2f}', 
-                 xy=(0.85, median), xycoords='data',  # Légèrement en dessous de la ligne
-                 bbox=dict(boxstyle="round,pad=0.3", edgecolor='blue', facecolor='white'),
-                 color='blue', fontsize=10, ha='center')
-
-    # Écart-type (à droite)
-    plt.annotate(f'Écart-type: {std:.2f}', 
-                 xy=(1.15, mean + std), xycoords='data',  # À droite de la ligne
-                 bbox=dict(boxstyle="round,pad=0.3", edgecolor='green', facecolor='white'),
-                 color='green', fontsize=10, ha='left')
-
-    # Accéder aux moustaches du boxplot (whiskers)
-    whiskers = ax.artists[0].get_paths()  # Obtenir les moustaches du boxplot
-    for i, whisker in enumerate(whiskers):
-        whisker_y = whisker.vertices[:, 1]  # Extraire les coordonnées Y des moustaches
-        whisker_position = whisker_y[0]  # Position du whisker (valeur à l'extrémité)
-
-        # Ajouter des annotations pour les moustaches
-        plt.annotate(f'Moustache {i+1}: {whisker_position:.2f}', 
-                     xy=(1.05, whisker_position), xycoords='data',  # Placer à droite des moustaches
-                     bbox=dict(boxstyle="round,pad=0.3", edgecolor='green', facecolor='white'),
-                     color='green', fontsize=10, ha='left')
-
-    # Titre et labels
-    plt.title(f'Box Plot {column_name}')
-    plt.ylabel(column_name)
-
-    # Ajouter une légende
-    plt.legend()
-
-    # Ajuster la mise en page
-    plt.tight_layout()
-
-    # Afficher le graphique
-    plt.show()
-
 def plot_histogram(df, column):
     """
-    Affiche un histogramme pour une variable donnée d'un DataFrame.
+    Affiche un histogramme pour une variable donnée d'un DataFrame avec estimation KDE.
+    Trace également les seuils des outliers selon la méthode interquartile (IQR).
+    
     :param df: DataFrame pandas
     :param column: Nom de la colonne à visualiser
     """
+    # Suppression des valeurs NaN
+    data = df[column].dropna()
+    
+    # Calcul des quartiles et de l'IQR
+    Q1 = np.percentile(data, 25)
+    Q3 = np.percentile(data, 75)
+    IQR = Q3 - Q1
+    
+    # Seuils des outliers
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    # Création du graphique
     plt.figure(figsize=(8, 5))
-    sns.histplot(df[column].dropna(), bins=30, kde=True)
-    plt.title(f'Histogramme de {column}')
+    sns.histplot(data, bins=30, kde=True, color="royalblue")
+    
+    # Ajout des lignes verticales pour les seuils des outliers
+    plt.axvline(lower_bound, color='red', linestyle='dashed', linewidth=2, label=f"Seuil bas ({lower_bound:.2f})")
+    plt.axvline(upper_bound, color='red', linestyle='dashed', linewidth=2, label=f"Seuil haut ({upper_bound:.2f})")
+    
+    # Personnalisation
+    plt.title(f'Histogramme de {column} avec détection des outliers (IQR)')
     plt.xlabel(column)
     plt.ylabel('Fréquence')
+    plt.legend()
+    
+    # Affichage du graphique
     plt.show()
 
 def plot_scatter(df, column_x, column_y):
@@ -933,4 +778,3 @@ def impute_missing_values(df, columns=None, estimator=BayesianRidge(), max_iter=
     df_imputed[columns] = imputer.fit_transform(df_imputed[columns])
     
     return df_imputed
-

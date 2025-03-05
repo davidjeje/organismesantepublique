@@ -17,6 +17,8 @@ jupyter = "^1.1.1"
 ipykernel = "^6.29.5"
 chardet = "^5.2.0"
 scipy = "^1.15.2"
+statsmodels = "^0.14.4"
+pylint = "^3.3.4"
 
 
 [build-system]
