@@ -436,7 +436,7 @@ def display_boxplot_with_stats(dataframe, column_name):
 
 def detect_outliers(df, columns, method="IQR", plausibility_check=True):
     """
-    Détecte les valeurs aberrantes dans les colonnes spécifiées du DataFrame sans utiliser scipy.
+    Détecte les valeurs aberrantes dans les colonnes spécifiées du DataFrame.
     
     Args:
     - df (pd.DataFrame): Le DataFrame contenant les données.
